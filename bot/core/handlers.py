@@ -323,13 +323,13 @@ def add_handlers():
     from ..helper.ext_utils.links_utils import is_url
     from pyrogram.filters import create
 
-    async def message_has_url(client, message, *args, **kwargs):
+    async def message_has_url(_, update, __):
         # Ignore commands
-        if message.text and message.text.strip().startswith("/"):
+        if update.text and update.text.strip().startswith("/"):
             return False
         # Check for any URL in the message
-        if message.text:
-            for word in message.text.split():
+        if update.text:
+            for word in update.text.split():
                 if is_url(word):
                     return True
         return False
