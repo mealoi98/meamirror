@@ -196,5 +196,8 @@ class DbManager:
     async def disconnect(self):
         pass
 
+    # Compatibility: for legacy code that checks database.db
+    db = None
+
 
 database = DbManager()
