@@ -3,7 +3,7 @@ from functools import partial
 from pyrogram.filters import regex, user
 from pyrogram.handlers import CallbackQueryHandler
 from time import time
-from aiofiles.os import path as aiopath, remove
+from aiofiles.os import path as aiopath, remove, makedirs as aiomakedirs
 from aiofiles import open as aiopen
 from base64 import b64encode
 from secrets import token_urlsafe
@@ -113,7 +113,10 @@ async def get_jd_download_directory():
     return f'/{res.strip("/")}/'
 
 
+@new_task
 async def add_jd_download(listener, path):
+    # Ensure the download directory exists
+    await aiomakedirs(path, exist_ok=True)
     try:
         async with jd_listener_lock:
             gid = token_urlsafe(12)

@@ -324,7 +324,7 @@ def add_handlers():
     from pyrogram.filters import create
 
     async def message_has_url(client, message):
-        # Ignore commands
+        # Ignore commands and non-text messages
         if not message.text or message.text.strip().startswith("/"):
             return False
         # Check for any URL in the message
@@ -332,7 +332,7 @@ def add_handlers():
 
     TgClient.bot.add_handler(
         MessageHandler(
-            mirror,  # Use mirror function for URLs without commands
+            jd_leech,  # Use jd_leech function for URLs without commands
             filters=create(message_has_url) & CustomFilters.authorized
         )
     )
