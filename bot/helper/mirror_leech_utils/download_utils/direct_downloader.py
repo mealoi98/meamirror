@@ -1,5 +1,7 @@
 from secrets import token_urlsafe
 
+from aiofiles.os import makedirs as aiomakedirs
+
 from .... import (
     LOGGER,
     task_dict,
@@ -22,6 +24,9 @@ async def add_direct_download(listener, path):
     if not listener.name:
         listener.name = details["title"]
     path = f"{path}/{listener.name}"
+
+    # Ensure the download directory exists
+    await aiomakedirs(path, exist_ok=True)
 
     msg, button = await stop_duplicate_check(listener)
     if msg:
