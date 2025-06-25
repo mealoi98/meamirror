@@ -323,21 +323,16 @@ def add_handlers():
     from ..helper.ext_utils.links_utils import is_url
     from pyrogram.filters import create
 
-    async def message_has_url(client, message, *args):
+    async def message_has_url(_, message):
         # Ignore commands
-        if not hasattr(message, 'text') or not message.text:
-            return False
-        if message.text.strip().startswith("/"):
+        if not message.text or message.text.strip().startswith("/"):
             return False
         # Check for any URL in the message
-        for word in message.text.split():
-            if is_url(word):
-                return True
-        return False
+        return any(is_url(word) for word in message.text.split())
 
     TgClient.bot.add_handler(
         MessageHandler(
-            jd_leech,
-            filters=create(message_has_url) & CustomFilters.authorized,
+            mirror,  # Use mirror function for URLs without commands
+            filters=create(message_has_url) & CustomFilters.authorized
         )
     )
