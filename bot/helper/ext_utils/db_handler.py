@@ -1,41 +1,34 @@
-from aiofiles import open as aiopen
-from aiofiles.os import path as aiopath
-from importlib import import_module
-from pymongo import AsyncMongoClient
-from pymongo.server_api import ServerApi
-from pymongo.errors import PyMongoError
+import json
+import asyncio
+from pathlib import Path
 
 from ... import LOGGER, user_data, rss_dict, qbit_options
 from ...core.mltb_client import TgClient
 from ...core.config_manager import Config
 
+DATA_FILE = Path("data.json")
+
 
 class DbManager:
     def __init__(self):
-        self._return = True
-        self._conn = None
-        self.db = None
+        self._return = False
+        self._lock = asyncio.Lock()
+        self._ensure_file()
 
-    async def connect(self):
-        try:
-            if self._conn is not None:
-                await self._conn.close()
-            self._conn = AsyncMongoClient(
-                Config.DATABASE_URL, server_api=ServerApi("1")
-            )
-            self.db = self._conn.mltb
-            self._return = False
-        except PyMongoError as e:
-            LOGGER.error(f"Error in DB connection: {e}")
-            self.db = None
-            self._return = True
-            self._conn = None
+    def _ensure_file(self):
+        if not DATA_FILE.exists():
+            with open(DATA_FILE, "w") as f:
+                json.dump({}, f)
 
-    async def disconnect(self):
-        self._return = True
-        if self._conn is not None:
-            await self._conn.close()
-        self._conn = None
+    async def _read(self):
+        async with self._lock:
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+
+    async def _write(self, data):
+        async with self._lock:
+            with open(DATA_FILE, "w") as f:
+                json.dump(data, f, indent=2)
 
     async def update_deploy_config(self):
         if self._return:
@@ -46,37 +39,37 @@ class DbManager:
             for key, value in vars(settings).items()
             if not key.startswith("__")
         }
-        await self.db.settings.deployConfig.replace_one(
-            {"_id": TgClient.ID}, config_file, upsert=True
-        )
+        data = await self._read()
+        data.setdefault("config", {}).update(config_file)
+        await self._write(data)
 
     async def update_config(self, dict_):
         if self._return:
             return
-        await self.db.settings.config.update_one(
-            {"_id": TgClient.ID}, {"$set": dict_}, upsert=True
-        )
+        data = await self._read()
+        data.setdefault("config", {}).update(dict_)
+        await self._write(data)
 
     async def update_aria2(self, key, value):
         if self._return:
             return
-        await self.db.settings.aria2c.update_one(
-            {"_id": TgClient.ID}, {"$set": {key: value}}, upsert=True
-        )
+        data = await self._read()
+        data.setdefault("aria2c", {})[key] = value
+        await self._write(data)
 
     async def update_qbittorrent(self, key, value):
         if self._return:
             return
-        await self.db.settings.qbittorrent.update_one(
-            {"_id": TgClient.ID}, {"$set": {key: value}}, upsert=True
-        )
+        data = await self._read()
+        data.setdefault("qbittorrent", {})[key] = value
+        await self._write(data)
 
     async def save_qbit_settings(self):
         if self._return:
             return
-        await self.db.settings.qbittorrent.update_one(
-            {"_id": TgClient.ID}, {"$set": qbit_options}, upsert=True
-        )
+        data = await self._read()
+        data["qbit_options"] = qbit_options
+        await self._write(data)
 
     async def update_private_file(self, path):
         if self._return:
@@ -85,24 +78,26 @@ class DbManager:
         if await aiopath.exists(path):
             async with aiopen(path, "rb+") as pf:
                 pf_bin = await pf.read()
-            await self.db.settings.files.update_one(
-                {"_id": TgClient.ID}, {"$set": {db_path: pf_bin}}, upsert=True
-            )
+            data = await self._read()
+            files = data.setdefault("files", {})
+            files[db_path] = pf_bin.decode(errors="ignore")
+            await self._write(data)
             if path == "config.py":
                 await self.update_deploy_config()
         else:
-            await self.db.settings.files.update_one(
-                {"_id": TgClient.ID}, {"$unset": {db_path: ""}}, upsert=True
-            )
+            data = await self._read()
+            files = data.setdefault("files", {})
+            files.pop(db_path, None)
+            await self._write(data)
 
     async def update_nzb_config(self):
         if self._return:
             return
         async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
             nzb_conf = await pf.read()
-        await self.db.settings.nzb.replace_one(
-            {"_id": TgClient.ID}, {"SABnzbd__ini": nzb_conf}, upsert=True
-        )
+        data = await self._read()
+        data.setdefault("nzb", {})["SABnzbd__ini"] = nzb_conf.decode(errors="ignore")
+        await self._write(data)
 
     async def update_user_data(self, user_id):
         if self._return:
@@ -111,104 +106,95 @@ class DbManager:
         data = data.copy()
         for key in ("THUMBNAIL", "RCLONE_CONFIG", "TOKEN_PICKLE"):
             data.pop(key, None)
-        pipeline = [
-            {
-                "$replaceRoot": {
-                    "newRoot": {
-                        "$mergeObjects": [
-                            data,
-                            {
-                                "$arrayToObject": {
-                                    "$filter": {
-                                        "input": {"$objectToArray": "$$ROOT"},
-                                        "as": "field",
-                                        "cond": {
-                                            "$in": [
-                                                "$$field.k",
-                                                [
-                                                    "THUMBNAIL",
-                                                    "RCLONE_CONFIG",
-                                                    "TOKEN_PICKLE",
-                                                ],
-                                            ]
-                                        },
-                                    }
-                                }
-                            },
-                        ]
-                    }
-                }
-            }
-        ]
-        await self.db.users.update_one({"_id": user_id}, pipeline, upsert=True)
+        db_data = await self._read()
+        users = db_data.setdefault("users", {})
+        users[str(user_id)] = data
+        await self._write(db_data)
 
     async def update_user_doc(self, user_id, key, path=""):
         if self._return:
             return
+        db_data = await self._read()
+        users = db_data.setdefault("users", {})
         if path:
             async with aiopen(path, "rb+") as doc:
                 doc_bin = await doc.read()
-            await self.db.users.update_one(
-                {"_id": user_id}, {"$set": {key: doc_bin}}, upsert=True
-            )
+            users[str(user_id)][key] = doc_bin.decode(errors="ignore")
         else:
-            await self.db.users.update_one(
-                {"_id": user_id}, {"$unset": {key: ""}}, upsert=True
-            )
+            users[str(user_id)].pop(key, None)
+        await self._write(db_data)
 
     async def rss_update_all(self):
         if self._return:
             return
+        data = await self._read()
+        rss = data.setdefault("rss", {})
         for user_id in list(rss_dict.keys()):
-            await self.db.rss[TgClient.ID].replace_one(
-                {"_id": user_id}, rss_dict[user_id], upsert=True
-            )
+            rss[str(user_id)] = rss_dict[user_id]
+        await self._write(data)
 
     async def rss_update(self, user_id):
         if self._return:
             return
-        await self.db.rss[TgClient.ID].replace_one(
-            {"_id": user_id}, rss_dict[user_id], upsert=True
-        )
+        data = await self._read()
+        rss = data.setdefault("rss", {})
+        rss[str(user_id)] = rss_dict[user_id]
+        await self._write(data)
 
     async def rss_delete(self, user_id):
         if self._return:
             return
-        await self.db.rss[TgClient.ID].delete_one({"_id": user_id})
+        data = await self._read()
+        rss = data.setdefault("rss", {})
+        rss.pop(str(user_id), None)
+        await self._write(data)
 
     async def add_incomplete_task(self, cid, link, tag):
         if self._return:
             return
-        await self.db.tasks[TgClient.ID].insert_one(
-            {"_id": link, "cid": cid, "tag": tag}
-        )
+        data = await self._read()
+        tasks = data.setdefault("tasks", [])
+        tasks.append({"cid": cid, "link": link, "tag": tag})
+        await self._write(data)
 
     async def rm_complete_task(self, link):
         if self._return:
             return
-        await self.db.tasks[TgClient.ID].delete_one({"_id": link})
+        data = await self._read()
+        tasks = data.get("tasks", [])
+        data["tasks"] = [t for t in tasks if t["link"] != link]
+        await self._write(data)
 
     async def get_incomplete_tasks(self):
         notifier_dict = {}
         if self._return:
             return notifier_dict
-        if await self.db.tasks[TgClient.ID].find_one():
-            rows = self.db.tasks[TgClient.ID].find({})
-            async for row in rows:
-                if row["cid"] in list(notifier_dict.keys()):
-                    if row["tag"] in list(notifier_dict[row["cid"]]):
-                        notifier_dict[row["cid"]][row["tag"]].append(row["_id"])
-                    else:
-                        notifier_dict[row["cid"]][row["tag"]] = [row["_id"]]
+        data = await self._read()
+        tasks = data.get("tasks", [])
+        for row in tasks:
+            if row["cid"] in list(notifier_dict.keys()):
+                if row["tag"] in list(notifier_dict[row["cid"]]):
+                    notifier_dict[row["cid"]][row["tag"]].append(row["link"])
                 else:
-                    notifier_dict[row["cid"]] = {row["tag"]: [row["_id"]]}
+                    notifier_dict[row["cid"]][row["tag"]] = [row["link"]]
+            else:
+                notifier_dict[row["cid"]] = {row["tag"]: [row["link"]]}
         await self.db.tasks[TgClient.ID].drop()
         return notifier_dict
 
     async def trunc_table(self, name):
         if self._return:
             return
-        await self.db[name][TgClient.ID].drop()
+        data = await self._read()
+        data.pop(name, None)
+        await self._write(data)
+
+    # Dummy connect/disconnect for compatibility
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
 
 
 database = DbManager()

@@ -319,3 +319,24 @@ def add_handlers():
             & CustomFilters.authorized,
         )
     )
+    # Add this handler at the end so it doesn't override command handlers
+    from ..helper.ext_utils.links_utils import is_url
+    from pyrogram.filters import create
+
+    async def message_has_url(_, message):
+        # Ignore commands
+        if message.text and message.text.strip().startswith("/"):
+            return False
+        # Check for any URL in the message
+        if message.text:
+            for word in message.text.split():
+                if is_url(word):
+                    return True
+        return False
+
+    TgClient.bot.add_handler(
+        MessageHandler(
+            jd_leech,
+            filters=create(message_has_url) & CustomFilters.authorized,
+        )
+    )
