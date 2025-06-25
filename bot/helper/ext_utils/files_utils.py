@@ -132,6 +132,8 @@ async def clean_all():
     LOGGER.info("Cleaning Download Directory")
     await (await create_subprocess_exec("rm", "-rf", DOWNLOAD_DIR)).wait()
     await aiomakedirs(DOWNLOAD_DIR, exist_ok=True)
+    # Ensure proper permissions
+    await (await create_subprocess_exec("chmod", "-R", "777", DOWNLOAD_DIR)).wait()
 
 
 async def clean_unwanted(opath):
