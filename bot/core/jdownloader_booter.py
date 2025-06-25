@@ -19,6 +19,7 @@ class JDownloader(MyJdApi):
         self._device_name = ""
         self.is_connected = False
         self.error = "JDownloader Credentials not provided!"
+        self._download_dir = "/usr/src/app/downloads"
 
     @new_task
     async def boot(self):
@@ -27,8 +28,12 @@ class JDownloader(MyJdApi):
             self.is_connected = False
             self.error = "JDownloader Credentials not provided!"
             return
-        self.error = "Connecting... Try agin after couple of seconds"
+        self.error = "Connecting... Try again after couple of seconds"
         self._device_name = f"{randint(0, 1000)}@{TgClient.NAME}"
+
+        # Ensure download directory exists
+        await makedirs(self._download_dir, exist_ok=True)
+
         if await path.exists("/JDownloader/logs"):
             LOGGER.info(
                 "Starting JDownloader... This might take up to 10 sec and might restart once if update available!"
@@ -37,12 +42,15 @@ class JDownloader(MyJdApi):
             LOGGER.info(
                 "Starting JDownloader... This might take up to 8 sec and might restart once after build!"
             )
+
+        # JDownloader configuration
         jdata = {
             "autoconnectenabledv2": True,
             "password": Config.JD_PASS,
             "devicename": f"{self._device_name}",
             "email": Config.JD_EMAIL,
         }
+
         remote_data = {
             "localapiserverheaderaccesscontrollalloworigin": "",
             "deprecatedapiport": 3128,
@@ -57,19 +65,33 @@ class JDownloader(MyJdApi):
             "externinterfacelocalhostonly": False,
             "localapiserverheaderxxssprotection": "1; mode=block",
         }
+
         await makedirs("/JDownloader/cfg", exist_ok=True)
+
+        # Save MyJDownloader settings
         with open(
             "/JDownloader/cfg/org.jdownloader.api.myjdownloader.MyJDownloaderSettings.json",
             "w",
         ) as sf:
             sf.truncate(0)
             dump(jdata, sf)
+
+        # Save Remote API config
         with open(
             "/JDownloader/cfg/org.jdownloader.api.RemoteAPIConfig.json",
             "w",
         ) as rf:
             rf.truncate(0)
             dump(remote_data, rf)
+
+        # Set default download directory
+        general_settings = {"DefaultDownloadFolder": self._download_dir}
+        with open(
+            "/JDownloader/cfg/org.jdownloader.settings.GeneralSettings.json", "w"
+        ) as gs:
+            gs.truncate(0)
+            dump(general_settings, gs)
+
         if not await path.exists("/JDownloader/JDownloader.jar"):
             pattern = r"JDownloader\.jar\.backup.\d$"
             for filename in await listdir("/JDownloader"):
@@ -80,9 +102,12 @@ class JDownloader(MyJdApi):
                     break
             await rmtree("/JDownloader/update")
             await rmtree("/JDownloader/tmp")
+
         cmd = "java -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8 -Djava.awt.headless=true -jar /JDownloader/JDownloader.jar"
         self.is_connected = True
         _, __, code = await cmd_exec(cmd, shell=True)
+
+        # If JDownloader exits, try to reconnect
         self.is_connected = False
         if code != -9:
             await self.boot()
